@@ -34,6 +34,7 @@ NICE_LEVEL=5                        # lower priority so the laptop stays snappy
 PLAYERS_POLL_SECONDS=15             # dashboard 'players' poll interval
 USE_STEAM="true"                    # true = Steam clients only | false = -nosteam (cracked/non-Steam allowed)
 AUTO_SAVE_MINUTES=10                # auto-save interval in minutes when players are online (0 = disabled)
+SAVED_WORKSHOP_ITEMS=""             # preserved list of Steam Workshop IDs
 
 # shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
@@ -109,6 +110,7 @@ save_config() {
         printf 'USE_STEAM=%q\n'            "$USE_STEAM"
         echo "# Auto-save interval in minutes when players are online (0 = disabled)"
         printf 'AUTO_SAVE_MINUTES=%q\n'    "$AUTO_SAVE_MINUTES"
+        printf 'SAVED_WORKSHOP_ITEMS=%q\n' "$SAVED_WORKSHOP_ITEMS"
     } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 }
@@ -163,9 +165,22 @@ apply_ini() {
     ini_set MaxPlayers "$MAX_PLAYERS"
     ini_set DefaultPort "$PORT"
     ini_set UDPPort "$UDP_PORT"
+
+    local current_ws
+    current_ws=$(ini_get WorkshopItems)
+    if [ -n "$current_ws" ]; then
+        SAVED_WORKSHOP_ITEMS="$current_ws"
+    fi
+
     if [ "$USE_STEAM" = "false" ]; then
         ini_set SteamVAC false
         ini_set SteamScoreboard false
+        # Suppress WorkshopItems in -nosteam mode so Java server won't crash querying Steam API
+        ini_set WorkshopItems ""
+    else
+        if [ -n "$SAVED_WORKSHOP_ITEMS" ]; then
+            ini_set WorkshopItems "$SAVED_WORKSHOP_ITEMS"
+        fi
     fi
 }
 
@@ -1508,31 +1523,174 @@ settings_menu() {
 }
 
 # ========================================================== mods manager ====
+bulk_import_mods() {
+    local input_file="$STATE_DIR/bulk_mods_input.txt"
+    echo
+    echo -e "  ${BOLD}${C}QUICK BULK MOD IMPORTER${NC}"
+    echo -e "  ${DIM}Paste your list of mods below (e.g. Mod Name <tab> WorkshopID <tab> ModID).${NC}"
+    echo -e "  ${Y}Instructions:${NC} Paste your text, press ${W}Enter${NC}, then press ${W}Ctrl+D${NC} to finish."
+    echo
+
+    mkdir -p "$STATE_DIR"
+    cat > "$input_file"
+
+    if [ ! -s "$input_file" ]; then
+        warn "No text pasted."
+        rm -f "$input_file"
+        return 1
+    fi
+
+    local cur_mods cur_ws new_m_list=() new_w_list=() line ws_id mod_id count=0
+    cur_mods=$(ini_get Mods)
+    cur_ws=${SAVED_WORKSHOP_ITEMS:-$(ini_get WorkshopItems)}
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        ws_id=$(echo "$line" | grep -oE '[0-9]{6,12}' | head -n1)
+        mod_id=$(echo "$line" | awk -F'\t|  +' '{print $NF}' | tr -d '\r ')
+        if [ "$mod_id" = "$ws_id" ] || [ -z "$mod_id" ]; then
+            mod_id=$(echo "$line" | awk '{print $NF}' | tr -d '\r ')
+        fi
+
+        if [[ $ws_id =~ ^[0-9]+$ ]] && [ -n "$mod_id" ] && [ "$mod_id" != "$ws_id" ]; then
+            if [[ ! ";$cur_ws;" =~ ";$ws_id;" ]] && [[ ! " ${new_w_list[*]} " =~ " $ws_id " ]]; then
+                new_w_list+=("$ws_id")
+            fi
+            if [[ ! ";$cur_mods;" =~ ";$mod_id;" ]] && [[ ! " ${new_m_list[*]} " =~ " $mod_id " ]]; then
+                new_m_list+=("$mod_id")
+            fi
+            count=$((count + 1))
+        fi
+    done < "$input_file"
+    rm -f "$input_file"
+
+    if [ "$count" -eq 0 ]; then
+        warn "Could not parse any valid Workshop ID / Mod ID pairs from the pasted text."
+        return 1
+    fi
+
+    for ws_id in "${new_w_list[@]}"; do
+        if [ -z "$cur_ws" ]; then cur_ws="$ws_id"; else cur_ws="${cur_ws};${ws_id}"; fi
+    done
+    SAVED_WORKSHOP_ITEMS="$cur_ws"
+
+    if [ "$USE_STEAM" = "true" ]; then
+        ini_set WorkshopItems "$cur_ws"
+    else
+        ini_set WorkshopItems ""
+    fi
+
+    for mod_id in "${new_m_list[@]}"; do
+        if [ -z "$cur_mods" ]; then cur_mods="$mod_id"; else cur_mods="${cur_mods};${mod_id}"; fi
+    done
+    ini_set Mods "$cur_mods"
+
+    if [[ ";$cur_mods;" =~ ";RV_Interior;" ]]; then
+        local cur_map; cur_map=$(ini_get Map)
+        if [[ ! ";$cur_map;" =~ "RV_Interior_Map" ]]; then
+            ini_set Map "RV_Interior_Map;${cur_map:-Muldraugh, KY}"
+            ok "Automatically added RV_Interior_Map to Map load order."
+        fi
+    fi
+
+    save_config
+    echo
+    ok "Successfully imported ${count} mod(s)!"
+    info "Current Mods: ${cur_mods}"
+    info "Current Workshop Items: ${cur_ws}"
+}
+
+test_mods_compatibility() {
+    local cur_mods cur_ws ws_dir1 ws_dir2 m_list=() w_list=() m w m_found=0 m_missing=0
+    cur_mods=$(ini_get Mods)
+    cur_ws=${SAVED_WORKSHOP_ITEMS:-$(ini_get WorkshopItems)}
+
+    echo
+    echo -e "  ${BOLD}${C}MOD COMPATIBILITY & VERIFICATION TESTER${NC}"
+    echo -e "  ${DIM}Checking configured mods against server storage...${NC}"
+    echo
+
+    if [ -z "$cur_mods" ] && [ -z "$cur_ws" ]; then
+        warn "No mods are currently configured in $(ini_file)."
+        return 0
+    fi
+
+    ws_dir1="$SERVER_DIR/steamapps/workshop/content/380870"
+    ws_dir2="$HOME/.steam/steam/steamapps/workshop/content/380870"
+
+    IFS=';' read -ra m_list <<< "$cur_mods"
+    IFS=';' read -ra w_list <<< "$cur_ws"
+
+    echo -e "  ${BOLD}Steam Auth Mode:${NC} $( [ "$USE_STEAM" = "true" ] && echo "${G}Enabled (Steam mode)${NC}" || echo "${Y}Disabled (-nosteam mode)${NC}" )"
+    echo -e "  ${BOLD}Total Configured Mods:${NC} ${#m_list[@]} Mod IDs | ${#w_list[@]} Workshop Items"
+    echo
+
+    echo -e "  ${BOLD}Workshop Items Status on Disk:${NC}"
+    for w in "${w_list[@]}"; do
+        [ -z "$w" ] && continue
+        if [ -d "$ws_dir1/$w" ] || [ -d "$ws_dir2/$w" ]; then
+            echo -e "   ${G}[✓] Workshop ID ${w}${NC} - Downloaded on disk"
+            m_found=$((m_found + 1))
+        else
+            echo -e "   ${Y}[!] Workshop ID ${w}${NC} - ${R}Not downloaded on disk yet${NC}"
+            m_missing=$((m_missing + 1))
+        fi
+    done
+
+    echo
+    echo -e "  ${BOLD}Special Mod Checks:${NC}"
+    if [[ ";$cur_mods;" =~ ";RV_Interior;" ]]; then
+        local cur_map; cur_map=$(ini_get Map)
+        if [[ ";$cur_map;" =~ "RV_Interior_Map" ]]; then
+            ok "RV_Interior map requirement: RV_Interior_Map is configured in Map setting."
+        else
+            warn "RV_Interior map missing! RV_Interior requires 'RV_Interior_Map' in Map setting."
+        fi
+    fi
+
+    if [[ ";$cur_mods;" =~ ";Arsenal(26)GunFighter;" ]] && [[ ! ";$cur_mods;" =~ ";tsarslib;" ]]; then
+        warn "Brita / GunFighter notice: tsarslib (Tsar's Common Library) is recommended."
+    fi
+
+    echo
+    if [ "$m_missing" -gt 0 ]; then
+        warn "${m_missing} Workshop mod(s) are missing from disk."
+        if [ "$USE_STEAM" = "false" ]; then
+            echo -e "  ${Y}To download missing mods:${NC}"
+            echo -e "   1. Go to Settings (Option 9 -> 11) and set Steam Auth to ${W}Enabled${NC}."
+            echo -e "   2. Start the server once (${W}Option 1${NC}) so Steam downloads the mod files."
+            echo -e "   3. Once online, stop server and switch back to ${W}-nosteam${NC} mode."
+        else
+            info "Start the server (Option 1) to let Steam download missing mods."
+        fi
+    else
+        ok "All ${m_found} Workshop items are downloaded and ready to play!"
+        [ "$USE_STEAM" = "false" ] && ok "Server is ready to launch in -nosteam mode for cracked/non-Steam players!"
+    fi
+}
+
 mods_menu() {
     local a cur_mods cur_ws mod_input ws_input
     while true; do
         cur_mods=$(ini_get Mods)
-        cur_ws=$(ini_get WorkshopItems)
+        cur_ws=${SAVED_WORKSHOP_ITEMS:-$(ini_get WorkshopItems)}
         echo
         echo -e "  ${BOLD}${C}Steam Workshop Mod Manager${NC}  ${DIM}($(ini_file))${NC}"
         echo -e "   Current Mods:           ${W}${cur_mods:-(none)}${NC}"
         echo -e "   Current Workshop Items: ${W}${cur_ws:-(none)}${NC}"
         echo
-        echo -e "   1) View current mods & workshop items"
-        echo -e "   2) Add a Steam Workshop Mod"
-        echo -e "   3) Remove a Mod"
-        echo -e "   4) Clear all Mods"
-        echo -e "   5) How to find Mod ID & Workshop ID"
+        echo -e "   1) Quick Bulk Importer ${G}(Paste list/table of mods at once)${NC}"
+        echo -e "   2) Run Mod Compatibility & Verification Tester"
+        echo -e "   3) Add a single Steam Workshop Mod"
+        echo -e "   4) Remove a Mod"
+        echo -e "   5) Clear all Mods"
+        echo -e "   6) How to find Mod ID & Workshop ID"
         echo -e "   0) Back"
         read -rp "  Choose: " a
         case $a in
-            1)
-                echo
-                echo -e "  ${BOLD}Installed / Configured Mods:${NC}"
-                echo -e "   • Mods:          ${W}${cur_mods:-(none)}${NC}"
-                echo -e "   • WorkshopItems: ${W}${cur_ws:-(none)}${NC}"
-                pause ;;
-            2)
+            1) bulk_import_mods; pause ;;
+            2) test_mods_compatibility; pause ;;
+            3)
                 echo
                 echo -e "  ${BOLD}Adding a Steam Workshop Mod:${NC}"
                 echo -e "  ${DIM}Example Workshop URL: https://steamcommunity.com/sharedfiles/filedetails/?id=2683801888${NC}"
@@ -1552,21 +1710,25 @@ mods_menu() {
                 fi
 
                 if [ -z "$cur_ws" ]; then
-                    ini_set WorkshopItems "$ws_input"
+                    cur_ws="$ws_input"
                 elif [[ ! ";$cur_ws;" =~ ";$ws_input;" ]]; then
-                    ini_set WorkshopItems "${cur_ws};${ws_input}"
+                    cur_ws="${cur_ws};${ws_input}"
                 fi
+                SAVED_WORKSHOP_ITEMS="$cur_ws"
+                if [ "$USE_STEAM" = "true" ]; then ini_set WorkshopItems "$cur_ws"; fi
 
                 if [ -z "$cur_mods" ]; then
-                    ini_set Mods "$mod_input"
+                    cur_mods="$mod_input"
                 elif [[ ! ";$cur_mods;" =~ ";$mod_input;" ]]; then
-                    ini_set Mods "${cur_mods};${mod_input}"
+                    cur_mods="${cur_mods};${mod_input}"
                 fi
+                ini_set Mods "$cur_mods"
 
+                save_config
                 ok "Added Mod '${mod_input}' (Workshop ID: ${ws_input}) to $(ini_file)."
-                warn "Changes will apply on the next server start (the server auto-downloads the mod)."
+                warn "Changes will apply on next server start."
                 pause ;;
-            3)
+            4)
                 if [ -z "$cur_mods" ] && [ -z "$cur_ws" ]; then
                     warn "No mods configured."
                     pause; continue
@@ -1580,18 +1742,22 @@ mods_menu() {
                 ini_set Mods "$new_m"
 
                 new_w=$(echo ";$cur_ws;" | sed "s/;${mod_input};/;/g" | sed 's/^;//;s/;$//')
-                ini_set WorkshopItems "$new_w"
+                SAVED_WORKSHOP_ITEMS="$new_w"
+                if [ "$USE_STEAM" = "true" ]; then ini_set WorkshopItems "$new_w"; fi
 
+                save_config
                 ok "Removed '${mod_input}'."
                 pause ;;
-            4)
+            5)
                 if confirm "Remove ALL mods from the server configuration?"; then
                     ini_set Mods ""
+                    SAVED_WORKSHOP_ITEMS=""
                     ini_set WorkshopItems ""
+                    save_config
                     ok "All mods cleared."
                 fi
                 pause ;;
-            5)
+            6)
                 echo
                 echo -e "  ${BOLD}${C}HOW TO FIND MOD ID AND WORKSHOP ID${NC}"
                 echo -e "  ${DIM}------------------------------------------------------${NC}"
@@ -1600,7 +1766,7 @@ mods_menu() {
                 echo -e "      The number at the end is the ${W}Workshop Item ID${NC} (2683801888)."
                 echo -e "   3. Look near the bottom of the mod description text:"
                 echo -e "      It lists ${W}Mod ID: Arsenal26GunFighter${NC}"
-                echo -e "   4. Enter both in Option 2 to enable the mod."
+                echo -e "   4. Enter both in Option 3 or paste a list in Option 1."
                 echo -e "  ${DIM}------------------------------------------------------${NC}"
                 pause ;;
             0|"") return ;;
