@@ -1,0 +1,18 @@
+# Project Zomboid server manager settings.
+# Rename this file to pz-server.conf or run ./pz-server.sh to generate configuration.
+SERVER_DIR=""
+ZOMBOID_DIR="$HOME/Zomboid"
+SERVER_NAME="servertest"
+BRANCH="public"
+RAM_MAX="6g"
+PORT=16261
+UDP_PORT=16262
+MAX_PLAYERS=8
+ADMIN_PASSWORD=""
+WARN_SECONDS=60
+BATTERY_STOP_PCT=15
+DEFAULT_LID_MODE="safe"
+NICE_LEVEL=5
+PLAYERS_POLL_SECONDS=15
+USE_STEAM="true"
+AUTO_SAVE_MINUTES=10

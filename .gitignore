@@ -1,0 +1,4 @@
+pz-server.conf
+*.prev.txt
+*.prev.log
+*.log
