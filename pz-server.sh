@@ -633,9 +633,13 @@ analyze_startup_failure() {
     elif echo "$combined" | grep -qiE 'OutOfMemoryError|Could not reserve enough space'; then
         warn "Java Out-Of-Memory (OOM) error detected!"
         echo -e "  ${DIM}Lower the RAM limit in Settings or free up system memory.${NC}"
-    elif echo "$combined" | grep -qiE 'Workshop: item|download failed|Mod file missing'; then
-        warn "Mod download or Workshop file failure detected!"
-        echo -e "  ${DIM}Check steam network connection or mod configuration in ${SERVER_NAME}.ini.${NC}"
+    elif echo "$combined" | grep -qiE 'onItemNotDownloaded|result=42|Workshop: item|download failed|Mod file missing|Install library folder not found'; then
+        warn "Steam Workshop Mod Download Failure detected!"
+        echo -e "  ${DIM}Project Zomboid failed to download Workshop mods because Steam Auth (USE_STEAM) was disabled or Steam content folder missing.${NC}"
+        echo -e "  ${W}Suggested Fix:${NC}"
+        echo -e "   1. Enable Steam Auth in Option 9 -> 11 (set to Enabled / USE_STEAM=true)."
+        echo -e "   2. Start the server so Steam can download the mods once."
+        echo -e "   3. Once mods are downloaded, you can switch back to -nosteam mode if desired."
     elif echo "$combined" | grep -qiE 'steam auth|invalid ticket|P2P|connection failed|p2p session'; then
         warn "Client authentication/connection issue detected in log!"
         echo -e "  ${DIM}If cracked/non-Steam players cannot join, ensure -nosteam mode is enabled (Option 9 -> 11).${NC}"
