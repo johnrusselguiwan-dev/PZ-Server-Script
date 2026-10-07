@@ -1449,6 +1449,7 @@ settings_menu() {
         echo -e "  10) UDP Ports            ${W}Main: ${PORT} / Peer: ${UDP_PORT}${NC}"
         echo -e "  11) Steam auth mode      ${W}$([ "$USE_STEAM" = "false" ] && echo 'Disabled (-nosteam / cracked allowed)' || echo 'Enabled (Steam clients only)')${NC}"
         echo -e "  12) Player Auto-save     ${W}$([ "${AUTO_SAVE_MINUTES:-10}" -gt 0 ] && echo "every ${AUTO_SAVE_MINUTES} min (when players online)" || echo 'Disabled')${NC}"
+        echo -e "  13) World & Sandbox      ${W}Configure Sleep, PvP, Starter Kit, Shutoffs...${NC}"
         echo -e "   0) Back"
         read -rp "  Choose: " a
         case $a in
@@ -1515,6 +1516,7 @@ settings_menu() {
                     5) AUTO_SAVE_MINUTES=0 ;;
                 esac
                 ok "Auto-save set to ${AUTO_SAVE_MINUTES} minutes (only when players are online)." ;;
+            13) world_settings_menu ;;
             0|"") return ;;
         esac
         save_config
@@ -1523,6 +1525,59 @@ settings_menu() {
 }
 
 # ========================================================== mods manager ====
+lua_file() { echo "$ZOMBOID_DIR/Server/${SERVER_NAME}_SandboxVars.lua"; }
+lua_get()  { grep -m1 -E "^[[:space:]]*$1[[:space:]]*=" "$(lua_file)" 2>/dev/null | sed -E 's/.*=[[:space:]]*([^,]+).*/\1/' | tr -d '\r" '; }
+lua_set()  { local f; f=$(lua_file); [ -f "$f" ] && sed -i -E "s/^([[:space:]]*$1[[:space:]]*=).*/\1 $2,/" "$f"; }
+
+world_settings_menu() {
+    local a v sleep_al sleep_nd pvp pause_e start_k water_s elec_s
+    while true; do
+        sleep_al=$(ini_get SleepAllowed); sleep_al=${sleep_al:-false}
+        sleep_nd=$(ini_get SleepNeeded); sleep_nd=${sleep_nd:-false}
+        pvp=$(ini_get PVP); pvp=${pvp:-true}
+        pause_e=$(ini_get PauseEmpty); pause_e=${pause_e:-true}
+        start_k=$(lua_get StarterKit); start_k=${start_k:-false}
+        water_s=$(lua_get WaterShut); water_s=${water_s:-2}
+        elec_s=$(lua_get ElecShut); elec_s=${elec_s:-2}
+
+        echo
+        echo -e "  ${BOLD}${C}World Generation & Sandbox Settings${NC}  ${DIM}($(ini_file))${NC}"
+        echo -e "   1) Sleep Allowed in MP:   ${W}${sleep_al}${NC} ${DIM}(allows players to sleep in beds)${NC}"
+        echo -e "   2) Sleep Needed:          ${W}${sleep_nd}${NC} ${DIM}(players get tired & require sleep)${NC}"
+        echo -e "   3) PvP Combat:            ${W}${pvp}${NC} ${DIM}(friendly fire between players)${NC}"
+        echo -e "   4) Pause when Empty:      ${W}${pause_e}${NC} ${DIM}(pause game time when no players online)${NC}"
+        echo -e "   5) Starter Kit on Spawn:  ${W}${start_k}${NC} ${DIM}(spawn with bag, bat, water, chips)${NC}"
+        echo -e "   6) Water Shutoff:         ${W}Option ${water_s}${NC} ${DIM}(2 = 0-30 days, 6 = Never)${NC}"
+        echo -e "   7) Electricity Shutoff:   ${W}Option ${elec_s}${NC} ${DIM}(2 = 0-30 days, 6 = Never)${NC}"
+        echo -e "   0) Back"
+        read -rp "  Choose: " a
+        case $a in
+            1) if [ "$sleep_al" = "true" ]; then ini_set SleepAllowed false; ok "Sleep Allowed set to false."; else ini_set SleepAllowed true; ok "Sleep Allowed set to true."; fi ;;
+            2) if [ "$sleep_nd" = "true" ]; then ini_set SleepNeeded false; ok "Sleep Needed set to false."; else ini_set SleepNeeded true; ini_set SleepAllowed true; ok "Sleep Needed set to true (enabling Sleep Allowed too)."; fi ;;
+            3) if [ "$pvp" = "true" ]; then ini_set PVP false; ok "PvP set to false (disabled)."; else ini_set PVP true; ok "PvP set to true (enabled)."; fi ;;
+            4) if [ "$pause_e" = "true" ]; then ini_set PauseEmpty false; ok "Pause when Empty set to false."; else ini_set PauseEmpty true; ok "Pause when Empty set to true."; fi ;;
+            5) if [ "$start_k" = "true" ]; then lua_set StarterKit false; ok "Starter Kit disabled."; else lua_set StarterKit true; ok "Starter Kit enabled."; fi ;;
+            6) echo -e "   1) Instant shutoff"
+               echo -e "   2) 0-30 days (default)"
+               echo -e "   3) 0-2 months"
+               echo -e "   4) 0-6 months"
+               echo -e "   5) 6-12 months"
+               echo -e "   6) Never shut off"
+               read -rp "  Choose [1-6]: " v
+               if [[ $v =~ ^[1-6]$ ]]; then lua_set WaterShut "$v"; ok "Water shutoff updated."; fi ;;
+            7) echo -e "   1) Instant shutoff"
+               echo -e "   2) 0-30 days (default)"
+               echo -e "   3) 0-2 months"
+               echo -e "   4) 0-6 months"
+               echo -e "   5) 6-12 months"
+               echo -e "   6) Never shut off"
+               read -rp "  Choose [1-6]: " v
+               if [[ $v =~ ^[1-6]$ ]]; then lua_set ElecShut "$v"; ok "Electricity shutoff updated."; fi ;;
+            0|"") return ;;
+        esac
+        [ -n "$(server_pid)" ] && warn "Changes will take effect on next server restart."
+    done
+}
 bulk_import_mods() {
     local input_file="$STATE_DIR/bulk_mods_input.txt"
     echo
@@ -1855,6 +1910,7 @@ case "${1:-menu}" in
     dashboard|status) dashboard ;;
     install|update) install_update ;;
     mods)           mods_menu ;;
+    world|sandbox)  world_settings_menu ;;
     restore-save|revert-save) restore_save_backup ;;
     restore-lid)    lid_restore_de_action; ok "Lid settings restored." ;;
     reset-data|troubleshoot) troubleshoot_menu ;;
