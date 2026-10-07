@@ -1829,6 +1829,147 @@ mods_menu() {
     done
 }
 
+# ========================================================== world profiles ====
+world_profiles_menu() {
+    local choice new_name src_name profiles=() profile p
+    while true; do
+        clear
+        echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
+        echo -e "${BOLD}${W}   WORLD PROFILES MANAGER (MULTI-WORLD SUPPORT)${NC}"
+        echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
+        echo -e "   Active Profile: ${BOLD}${G}${SERVER_NAME}${NC}"
+        echo -e "   ${DIM}All worlds exist independently in ~/Zomboid/ and never corrupt each other.${NC}"
+        echo
+
+        profiles=()
+        for p in "$ZOMBOID_DIR"/Server/*.ini; do
+            [ -f "$p" ] || continue
+            local base
+            base=$(basename "$p" .ini)
+            profiles+=("$base")
+        done
+        for p in "$ZOMBOID_DIR"/Saves/Multiplayer/*; do
+            [ -d "$p" ] || continue
+            local base
+            base=$(basename "$p")
+            local exists=false
+            for ex in "${profiles[@]}"; do
+                if [ "$ex" = "$base" ]; then exists=true; break; fi
+            done
+            if [ "$exists" = "false" ]; then profiles+=("$base"); fi
+        done
+
+        if [ ${#profiles[@]} -eq 0 ]; then
+            profiles+=("servertest")
+        fi
+
+        echo -e "   ${BOLD}${W}Available Worlds on Server:${NC}"
+        local idx=1
+        for p in "${profiles[@]}"; do
+            local mark="  "
+            [ "$p" = "$SERVER_NAME" ] && mark="${G}➔ ${NC}"
+            
+            local save_info="no save map yet"
+            if [ -d "$ZOMBOID_DIR/Saves/Multiplayer/$p" ]; then
+                local sz
+                sz=$(du -sh "$ZOMBOID_DIR/Saves/Multiplayer/$p" 2>/dev/null | cut -f1)
+                save_info="save size: ${sz:-0B}"
+            fi
+            
+            echo -e "   ${mark}${W}${idx})${NC} ${BOLD}${p}${NC} ${DIM}(${save_info})${NC}"
+            idx=$((idx + 1))
+        done
+
+        echo
+        echo -e "   ${W}S)${NC} Switch active world profile"
+        echo -e "   ${W}N)${NC} Create NEW blank world profile"
+        echo -e "   ${W}C)${NC} Clone existing world profile ${DIM}(e.g. duplicate main world for mod testing)${NC}"
+        echo -e "   ${W}0)${NC} Back to main menu"
+        echo
+        read -rp "  Choose action: " choice
+        case ${choice,,} in
+            s)
+                if [ -n "$(server_pid)" ]; then
+                    warn "Server is currently running! Please stop the server before switching active profile."
+                    pause; continue
+                fi
+                echo
+                read -rp "  Enter profile number or exact name to activate: " p
+                if [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le "${#profiles[@]}" ]; then
+                    SERVER_NAME="${profiles[$((p-1))]}"
+                    save_config
+                    ok "Active world profile set to '${SERVER_NAME}'."
+                elif [ -n "$p" ]; then
+                    SERVER_NAME="$p"
+                    save_config
+                    ok "Active world profile set to '${SERVER_NAME}'."
+                else
+                    warn "Invalid selection."
+                fi
+                pause ;;
+            n)
+                if [ -n "$(server_pid)" ]; then
+                    warn "Server is currently running! Please stop the server before creating a profile."
+                    pause; continue
+                fi
+                echo
+                read -rp "  Enter name for NEW world profile (e.g. mod_testing): " new_name
+                new_name=$(echo "$new_name" | tr -cd 'a-zA-Z0-9_-')
+                if [ -z "$new_name" ]; then
+                    err "Invalid profile name."
+                    pause; continue
+                fi
+                SERVER_NAME="$new_name"
+                save_config
+                mkdir -p "$ZOMBOID_DIR/Server" "$ZOMBOID_DIR/Saves/Multiplayer" "$ZOMBOID_DIR/db"
+                if [ ! -f "$ZOMBOID_DIR/Server/${new_name}.ini" ]; then
+                    cat <<EOFINI > "$ZOMBOID_DIR/Server/${new_name}.ini"
+PVP=true
+PauseEmpty=true
+GlobalChat=true
+Open=true
+ServerWelcomeMessage=Welcome to Project Zomboid Server ($new_name)!
+LogLocalic=true
+AutoSaveMinutes=10
+EOFINI
+                fi
+                ok "Created new profile '${new_name}' and set as ACTIVE."
+                pause ;;
+            c)
+                if [ -n "$(server_pid)" ]; then
+                    warn "Server is currently running! Please stop the server before cloning."
+                    pause; continue
+                fi
+                echo
+                read -rp "  Enter source profile name to clone [${SERVER_NAME}]: " src_name
+                src_name="${src_name:-$SERVER_NAME}"
+                read -rp "  Enter name for CLONED world profile (e.g. ${src_name}_test): " new_name
+                new_name=$(echo "$new_name" | tr -cd 'a-zA-Z0-9_-')
+                if [ -z "$new_name" ]; then
+                    err "Invalid clone profile name."
+                    pause; continue
+                fi
+                info "Cloning profile '${src_name}' to '${new_name}'..."
+                mkdir -p "$ZOMBOID_DIR/Server" "$ZOMBOID_DIR/Saves/Multiplayer" "$ZOMBOID_DIR/db"
+                
+                [ -f "$ZOMBOID_DIR/Server/${src_name}.ini" ] && cp -f "$ZOMBOID_DIR/Server/${src_name}.ini" "$ZOMBOID_DIR/Server/${new_name}.ini"
+                [ -f "$ZOMBOID_DIR/Server/${src_name}_SandboxVars.lua" ] && cp -f "$ZOMBOID_DIR/Server/${src_name}_SandboxVars.lua" "$ZOMBOID_DIR/Server/${new_name}_SandboxVars.lua"
+                [ -f "$ZOMBOID_DIR/Server/${src_name}_spawnregions.lua" ] && cp -f "$ZOMBOID_DIR/Server/${src_name}_spawnregions.lua" "$ZOMBOID_DIR/Server/${new_name}_spawnregions.lua"
+                [ -f "$ZOMBOID_DIR/db/${src_name}.db" ] && cp -f "$ZOMBOID_DIR/db/${src_name}.db" "$ZOMBOID_DIR/db/${new_name}.db"
+                
+                if [ -d "$ZOMBOID_DIR/Saves/Multiplayer/${src_name}" ]; then
+                    cp -r "$ZOMBOID_DIR/Saves/Multiplayer/${src_name}" "$ZOMBOID_DIR/Saves/Multiplayer/${new_name}"
+                fi
+
+                SERVER_NAME="$new_name"
+                save_config
+                ok "Successfully cloned '${src_name}' into '${new_name}' and set as ACTIVE!"
+                pause ;;
+            0|"") return ;;
+        esac
+    done
+}
+
 # ================================================================== menu ====
 main_menu() {
     local a st pc
@@ -1856,6 +1997,7 @@ main_menu() {
         echo -e "   ${W}9)${NC} Settings"
         echo -e "  ${W}10)${NC} ${Y}Troubleshoot / reset server data${NC} ${DIM}(wipe map/save on failure)${NC}"
         echo -e "  ${W}11)${NC} ${C}Steam Workshop Mods Manager${NC} ${DIM}(add/remove mods)${NC}"
+        echo -e "  ${W}12)${NC} ${G}World Profiles Manager${NC} ${DIM}(switch / create / clone distinct worlds)${NC}"
         echo -e "   ${W}0)${NC} Exit ${DIM}(server keeps running in the background)${NC}"
         echo
         read -rp "  Choose: " a
@@ -1878,6 +2020,7 @@ main_menu() {
             9) settings_menu ;;
             10) troubleshoot_menu ;;
             11) mods_menu ;;
+            12) world_profiles_menu ;;
             0|q|Q) clear; exit 0 ;;
         esac
     done
@@ -1911,6 +2054,7 @@ case "${1:-menu}" in
     install|update) install_update ;;
     mods)           mods_menu ;;
     world|sandbox)  world_settings_menu ;;
+    profile|profiles|switch-world) world_profiles_menu ;;
     restore-save|revert-save) restore_save_backup ;;
     restore-lid)    lid_restore_de_action; ok "Lid settings restored." ;;
     reset-data|troubleshoot) troubleshoot_menu ;;
