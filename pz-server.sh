@@ -1096,7 +1096,19 @@ render_dashboard() {
     # --- events
     L "${DIM}${hr}${NC}"
     L " ${BOLD}${Y}RECENT EVENTS${NC}"
-    if [ -s "$LOG_FILE" ]; then
+    local latest_log
+    latest_log=$(ls -t "$ZOMBOID_DIR"/Logs/logs_*/*DebugLog-server.txt 2>/dev/null | head -n1)
+    if [ -n "$latest_log" ] && [ -s "$latest_log" ]; then
+        ev=$(grep -aiE 'fully.?connected|connected new client|disconnect|SERVER STARTED|world saved|servermsg|error|exception' "$latest_log" 2>/dev/null \
+             | grep -v 'Players connected' | tail -n 6 | tr -d '\r' \
+             | sed -E 's/.*([0-9]{2}:[0-9]{2}:[0-9]{2})\.[0-9]+.*> (.*)/[\1] \2/' \
+             | cut -c1-$((cols - 5)))
+        if [ -n "$ev" ]; then
+            while IFS= read -r line; do L "  ${B}›${NC} ${line}"; done <<< "$ev"
+        else
+            L "  ${DIM}No events yet.${NC}"
+        fi
+    elif [ -s "$LOG_FILE" ]; then
         ev=$(grep -aiE 'fully.?connected|connected new client|disconnect|SERVER STARTED|world saved|servermsg|error|exception' "$LOG_FILE" 2>/dev/null \
              | grep -v 'Players connected' | tail -n 6 | tr -d '\r' | cut -c1-$((cols - 5)))
         if [ -n "$ev" ]; then
@@ -1105,7 +1117,7 @@ render_dashboard() {
             L "  ${DIM}No events yet.${NC}"
         fi
     else
-        L "  ${DIM}No server log yet (${LOG_FILE}).${NC}"
+        L "  ${DIM}No server log yet.${NC}"
     fi
 
     L "${BOLD}${C}${hr}${NC}"
