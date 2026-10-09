@@ -2090,10 +2090,11 @@ EOFINI
 
 # ================================================================== menu ====
 main_menu() {
-    local a st pc steam_mode_text
+    local a st st_col pc steam_mode_text
     while true; do
         clear
         st=$(server_state)
+        st_col=$(state_colored "$st")
         parse_players
         pc=""
         [ "$st" = "ONLINE" ] && [ -n "$PLAYER_COUNT" ] && pc=" ${DIM}·${NC} ${G}${PLAYER_COUNT} Players Online${NC}"
@@ -2107,7 +2108,7 @@ main_menu() {
         echo -e "${BOLD}${C}══════════════════════════════════════════════════════════════${NC}"
         echo -e "${BOLD}${W}   PROJECT ZOMBOID SERVER MANAGER${NC}"
         echo -e "${BOLD}${C}══════════════════════════════════════════════════════════════${NC}"
-        echo -e "   Active World:  ${BOLD}${W}${SERVER_NAME}${NC} (${state_colored "$st"}${pc})"
+        echo -e "   Active World:  ${BOLD}${W}${SERVER_NAME}${NC} (${st_col}${pc})"
         echo -e "   Lid Mode:      $(lid_mode_text)"
         echo -e "   Steam Auth:    ${steam_mode_text}"
         detect_server_dir || echo -e "   ${Y}[!] Server not installed yet — use option 12 to install.${NC}"
