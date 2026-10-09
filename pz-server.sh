@@ -804,6 +804,7 @@ troubleshoot_menu() {
         echo -e "   4) ${R}Reset / Delete server map & save files${NC} (fresh start)"
         echo -e "   5) View last 30 lines of startup log"
         echo -e "   6) View full server console log"
+        echo -e "   7) ${C}Player Connection & Login Diagnostics Log${NC}"
         echo -e "   0) Back"
         read -rp "  Choose: " a
         case $a in
@@ -813,6 +814,7 @@ troubleshoot_menu() {
             4) wipe_server_data; pause ;;
             5) echo; tail -n 30 "$STATE_DIR/server-screen.log" 2>/dev/null | sed 's/^/    /'; pause ;;
             6) if [ -f "$LOG_FILE" ]; then less -R "$LOG_FILE"; else warn "Log file not found."; pause; fi ;;
+            7) player_login_diagnostics ;;
             0|"") return ;;
         esac
     done
@@ -1667,13 +1669,13 @@ bulk_import_mods() {
 }
 
 test_mods_compatibility() {
-    local cur_mods cur_ws ws_dir1 ws_dir2 m_list=() w_list=() m w m_found=0 m_missing=0
+    local cur_mods cur_ws m_list=() w_list=() m w m_found=0 m_missing=0
     cur_mods=$(ini_get Mods)
     cur_ws=${SAVED_WORKSHOP_ITEMS:-$(ini_get WorkshopItems)}
 
     echo
-    echo -e "  ${BOLD}${C}MOD COMPATIBILITY & VERIFICATION TESTER${NC}"
-    echo -e "  ${DIM}Checking configured mods against server storage...${NC}"
+    echo -e "  ${BOLD}${C}DEEP MOD COMPATIBILITY & VERIFICATION TESTER${NC}"
+    echo -e "  ${DIM}Checking configured mods, mod.info IDs, dependencies, and disk storage...${NC}"
     echo
 
     if [ -z "$cur_mods" ] && [ -z "$cur_ws" ]; then
@@ -1681,10 +1683,15 @@ test_mods_compatibility() {
         return 0
     fi
 
-    ws_dir1="$SERVER_DIR/steamapps/workshop/content/380870"
-    ws_dir2="$HOME/.steam/steam/steamapps/workshop/content/380870"
-    ws_dir3="$HOME/.local/share/Steam/steamapps/workshop/content/380870"
-    ws_dir4="$HOME/Zomboid/workshop/content/380870"
+    local ws_dirs=(
+        "$SERVER_DIR/steamapps/workshop/content/380870"
+        "$SERVER_DIR/steamapps/workshop/content/108600"
+        "$HOME/.steam/steam/steamapps/workshop/content/380870"
+        "$HOME/.steam/steam/steamapps/workshop/content/108600"
+        "$HOME/.steam/debian-installation/steamapps/workshop/content/108600"
+        "$HOME/.local/share/Steam/steamapps/workshop/content/380870"
+        "$HOME/Zomboid/workshop/content/380870"
+    )
 
     IFS=';' read -ra m_list <<< "$cur_mods"
     IFS=';' read -ra w_list <<< "$cur_ws"
@@ -1693,12 +1700,55 @@ test_mods_compatibility() {
     echo -e "  ${BOLD}Total Configured Mods:${NC} ${#m_list[@]} Mod IDs | ${#w_list[@]} Workshop Items"
     echo
 
-    echo -e "  ${BOLD}Workshop Items Status on Disk:${NC}"
+    echo -e "  ${BOLD}Workshop Items & Deep Mod ID Inspection:${NC}"
     for w in "${w_list[@]}"; do
         [ -z "$w" ] && continue
-        if [ -d "$ws_dir1/$w" ] || [ -d "$ws_dir2/$w" ] || [ -d "$ws_dir3/$w" ] || [ -d "$ws_dir4/$w" ]; then
-            echo -e "   ${G}[✓] Workshop ID ${w}${NC} - Downloaded on disk"
+        local item_found=false target_dir=""
+        for d in "${ws_dirs[@]}"; do
+            if [ -d "$d/$w" ]; then
+                item_found=true
+                target_dir="$d/$w"
+                break
+            fi
+        done
+
+        if [ "$item_found" = "true" ]; then
             m_found=$((m_found + 1))
+            local info_files=()
+            while IFS= read -r -d '' f; do
+                info_files+=("$f")
+            done < <(find "$target_dir" -name "mod.info" -print0 2>/dev/null)
+
+            if [ ${#info_files[@]} -gt 0 ]; then
+                local actual_id actual_name req_mod
+                actual_id=$(grep -iE '^id=' "${info_files[0]}" 2>/dev/null | cut -d'=' -f2- | tr -d '\r ')
+                actual_name=$(grep -iE '^name=' "${info_files[0]}" 2>/dev/null | cut -d'=' -f2- | tr -d '\r')
+                req_mod=$(grep -iE '^require=' "${info_files[0]}" 2>/dev/null | cut -d'=' -f2- | tr -d '\r\\ ')
+
+                local matched_id=false
+                for cm in "${m_list[@]}"; do
+                    if [ "$cm" = "$actual_id" ]; then matched_id=true; break; fi
+                done
+
+                if [ "$matched_id" = "true" ]; then
+                    echo -e "   ${G}[✓] Workshop ID ${w}${NC} - ${BOLD}${actual_name:-Mod}${NC} (id=${G}${actual_id}${NC}) ${DIM}[VERIFIED]${NC}"
+                else
+                    echo -e "   ${Y}[!] Workshop ID ${w}${NC} - ${BOLD}${actual_name:-Mod}${NC}"
+                    warn "    └─ Mod ID Mismatch! On-disk mod.info specifies id='${actual_id}', but config has '${m_list[0]}'."
+                fi
+
+                if [ -n "$req_mod" ]; then
+                    local req_found=false
+                    for cm in "${m_list[@]}"; do
+                        if [ "$cm" = "$req_mod" ]; then req_found=true; break; fi
+                    done
+                    if [ "$req_found" = "false" ]; then
+                        warn "    └─ Missing Dependency: Requires parent mod id='${req_mod}' in Mods setting!"
+                    fi
+                fi
+            else
+                echo -e "   ${G}[✓] Workshop ID ${w}${NC} - Downloaded on disk"
+            fi
         else
             echo -e "   ${Y}[!] Workshop ID ${w}${NC} - ${R}Not downloaded on disk yet${NC}"
             m_missing=$((m_missing + 1))
@@ -1716,25 +1766,78 @@ test_mods_compatibility() {
         fi
     fi
 
-    if [[ ";$cur_mods;" =~ ";Arsenal(26)GunFighter;" ]] && [[ ! ";$cur_mods;" =~ ";tsarslib;" ]]; then
-        warn "Brita / GunFighter notice: tsarslib (Tsar's Common Library) is recommended."
-    fi
-
     echo
     if [ "$m_missing" -gt 0 ]; then
         warn "${m_missing} Workshop mod(s) are missing from disk."
-        if [ "$USE_STEAM" = "false" ]; then
-            echo -e "  ${Y}To download missing mods:${NC}"
-            echo -e "   1. Go to Settings (Option 9 -> 11) and set Steam Auth to ${W}Enabled${NC}."
-            echo -e "   2. Start the server once (${W}Option 1${NC}) so Steam downloads the mod files."
-            echo -e "   3. Once online, stop server and switch back to ${W}-nosteam${NC} mode."
+    else
+        ok "All ${m_found} Workshop items are verified on disk!"
+    fi
+}
+
+player_login_diagnostics() {
+    clear
+    echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${W}   PLAYER LOGIN & CONNECTION DIAGNOSTICS LOGS${NC}"
+    echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
+    echo -e "  Scanning server logs for connection attempts, logins, and errors..."
+    echo
+
+    local conn_log debug_log
+    conn_log=$(ls -t "$ZOMBOID_DIR"/Logs/logs_*/*connections.txt 2>/dev/null | head -n1)
+    debug_log=$(ls -t "$ZOMBOID_DIR"/Logs/logs_*/*DebugLog-server.txt 2>/dev/null | head -n1)
+
+    echo -e "  ${BOLD}Recent Player Connections & Login History:${NC}"
+    if [ -n "$conn_log" ] && [ -s "$conn_log" ]; then
+        grep -aiE 'fully-connected|login-queue-request|connection-lost|disconnect' "$conn_log" 2>/dev/null \
+            | tail -n 14 \
+            | while IFS= read -r line; do
+                local time_str evt user ip client_type
+                time_str=$(echo "$line" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n1)
+                evt=$(echo "$line" | sed -n 's/.*event="\([^"]*\)".*/\1/p')
+                user=$(echo "$line" | sed -n 's/.*username="\([^"]*\)".*/\1/p')
+                ip=$(echo "$line" | sed -n 's/.*ip="\([^"]*\)".*/\1/p')
+                client_type=$(echo "$line" | sed -n 's/.*connection-type="\([^"]*\)".*/\1/p')
+
+                [ "$user" = "null" ] || [ -z "$user" ] && continue
+
+                case "$evt" in
+                    fully-connected)
+                        echo -e "   ${G}[✓] [${time_str}]${NC} ${BOLD}${user}${NC} (${client_type}, IP: ${ip:-n/a}) -> ${G}SUCCESSFULLY CONNECTED${NC}" ;;
+                    login-queue-request)
+                        echo -e "   ${C}[*] [${time_str}]${NC} ${user} (${client_type}, IP: ${ip:-n/a}) -> Attempting login..." ;;
+                    connection-lost|disconnect)
+                        echo -e "   ${Y}[!] [${time_str}]${NC} ${user} -> Disconnected (${evt})" ;;
+                    *)
+                        echo -e "   ${DIM}• [${time_str}] ${user} (${evt})${NC}" ;;
+                esac
+            done
+    else
+        echo -e "   ${DIM}(No connections log found yet)${NC}"
+    fi
+
+    echo
+    echo -e "  ${BOLD}Recent Rejections / Kicks / Errors:${NC}"
+    if [ -n "$debug_log" ] && [ -s "$debug_log" ]; then
+        local errors
+        errors=$(grep -E '^\[[0-9]{2}-[0-9]{2}-[0-9]{2}' "$debug_log" 2>/dev/null \
+                 | grep -aiE 'rejected|Kicked|denied|checksum|version|Auth|failed|Password|invalid' \
+                 | grep -v 'Players connected' | tail -n 8)
+        if [ -n "$errors" ]; then
+            while IFS= read -r eline; do
+                local t_str msg_str
+                t_str=$(echo "$eline" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n1)
+                msg_str=$(echo "$eline" | sed -E 's/.*> (.*)/\1/')
+                echo -e "   ${R}[✘] [${t_str:-??:??:??}]${NC} ${msg_str}"
+            done <<< "$errors"
         else
-            info "Start the server (Option 1) to let Steam download missing mods."
+            ok "No player login rejections or checksum kicks found in latest server log."
         fi
     else
-        ok "All ${m_found} Workshop items are downloaded and ready to play!"
-        [ "$USE_STEAM" = "false" ] && ok "Server is ready to launch in -nosteam mode for cracked/non-Steam players!"
+        echo -e "   ${DIM}(No debug log found yet)${NC}"
     fi
+
+    echo
+    pause
 }
 
 mods_menu() {
@@ -1748,11 +1851,12 @@ mods_menu() {
         echo -e "   Current Workshop Items: ${W}${cur_ws:-(none)}${NC}"
         echo
         echo -e "   1) Quick Bulk Importer ${G}(Paste list/table of mods at once)${NC}"
-        echo -e "   2) Run Mod Compatibility & Verification Tester"
+        echo -e "   2) Run Deep Mod Compatibility & Verification Tester"
         echo -e "   3) Add a single Steam Workshop Mod"
         echo -e "   4) Remove a Mod"
         echo -e "   5) Clear all Mods"
         echo -e "   6) How to find Mod ID & Workshop ID"
+        echo -e "   7) ${C}Player Login & Connection Diagnostics Log${NC}"
         echo -e "   0) Back"
         read -rp "  Choose: " a
         case $a in
@@ -1837,6 +1941,7 @@ mods_menu() {
                 echo -e "   4. Enter both in Option 3 or paste a list in Option 1."
                 echo -e "  ${DIM}------------------------------------------------------${NC}"
                 pause ;;
+            7) player_login_diagnostics ;;
             0|"") return ;;
         esac
     done
@@ -2068,6 +2173,7 @@ case "${1:-menu}" in
     mods)           mods_menu ;;
     world|sandbox)  world_settings_menu ;;
     profile|profiles|switch-world) world_profiles_menu ;;
+    logins|connections|login-history) player_login_diagnostics ;;
     restore-save|revert-save) restore_save_backup ;;
     restore-lid)    lid_restore_de_action; ok "Lid settings restored." ;;
     reset-data|troubleshoot) troubleshoot_menu ;;
