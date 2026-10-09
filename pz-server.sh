@@ -1099,7 +1099,8 @@ render_dashboard() {
     local latest_log
     latest_log=$(ls -t "$ZOMBOID_DIR"/Logs/logs_*/*DebugLog-server.txt 2>/dev/null | head -n1)
     if [ -n "$latest_log" ] && [ -s "$latest_log" ]; then
-        ev=$(grep -aiE 'fully.?connected|connected new client|disconnect|SERVER STARTED|world saved|servermsg|error|exception' "$latest_log" 2>/dev/null \
+        ev=$(grep -E '^\[[0-9]{2}-[0-9]{2}-[0-9]{2}' "$latest_log" 2>/dev/null \
+             | grep -aiE 'fully.?connected|connected new client|disconnect|SERVER STARTED|world saved|servermsg|error|exception' \
              | grep -v 'Players connected' | tail -n 6 | tr -d '\r' \
              | sed -E 's/.*([0-9]{2}:[0-9]{2}:[0-9]{2})\.[0-9]+.*> (.*)/[\1] \2/' \
              | cut -c1-$((cols - 5)))
