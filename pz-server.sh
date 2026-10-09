@@ -1614,10 +1614,8 @@ bulk_import_mods() {
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         ws_id=$(echo "$line" | grep -oE '[0-9]{6,12}' | head -n1)
-        mod_id=$(echo "$line" | awk -F'\t|  +' '{print $NF}' | tr -d '\r ')
-        if [ "$mod_id" = "$ws_id" ] || [ -z "$mod_id" ]; then
-            mod_id=$(echo "$line" | awk '{print $NF}' | tr -d '\r ')
-        fi
+        mod_id=$(echo "$line" | awk '{print $NF}' | tr -d '\r ')
+        [ "$mod_id" = "$ws_id" ] && mod_id=$(echo "$line" | sed -E "s/.*[0-9]{6,12}//g" | tr -d '\r\t ')
 
         if [[ $ws_id =~ ^[0-9]+$ ]] && [ -n "$mod_id" ] && [ "$mod_id" != "$ws_id" ]; then
             if [[ ! ";$cur_ws;" =~ ";$ws_id;" ]] && [[ ! " ${new_w_list[*]} " =~ " $ws_id " ]]; then
