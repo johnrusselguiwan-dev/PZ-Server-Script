@@ -2090,55 +2090,75 @@ EOFINI
 
 # ================================================================== menu ====
 main_menu() {
-    local a st pc
+    local a st pc steam_mode_text
     while true; do
         clear
         st=$(server_state)
         parse_players
         pc=""
-        [ "$st" = "ONLINE" ] && [ -n "$PLAYER_COUNT" ] && pc="   Players: ${PLAYER_COUNT}"
-        echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
+        [ "$st" = "ONLINE" ] && [ -n "$PLAYER_COUNT" ] && pc=" ${DIM}·${NC} ${G}${PLAYER_COUNT} Players Online${NC}"
+
+        if [ "$USE_STEAM" = "false" ]; then
+            steam_mode_text="${Y}Disabled (-nosteam / cracked allowed)${NC}"
+        else
+            steam_mode_text="${G}Enabled (Steam clients only)${NC}"
+        fi
+
+        echo -e "${BOLD}${C}══════════════════════════════════════════════════════════════${NC}"
         echo -e "${BOLD}${W}   PROJECT ZOMBOID SERVER MANAGER${NC}"
-        echo -e "${BOLD}${C}══════════════════════════════════════════════════════${NC}"
-        echo -e "   Server '${SERVER_NAME}': $(state_colored "$st")${pc}"
-        [ "$st" != "OFFLINE" ] && echo -e "   Lid mode: $(lid_mode_text)"
-        detect_server_dir || echo -e "   ${Y}Server not installed yet - use option 7.${NC}"
+        echo -e "${BOLD}${C}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "   Active World:  ${BOLD}${W}${SERVER_NAME}${NC} (${state_colored "$st"}${pc})"
+        echo -e "   Lid Mode:      $(lid_mode_text)"
+        echo -e "   Steam Auth:    ${steam_mode_text}"
+        detect_server_dir || echo -e "   ${Y}[!] Server not installed yet — use option 12 to install.${NC}"
+        echo -e "${DIM}──────────────────────────────────────────────────────────────${NC}"
+
+        echo -e "  ${BOLD}${C}⚡ SERVER CONTROLS (Daily Use)${NC}"
+        echo -e "   ${W}1)${NC} Start Server             ${DIM}Boot server & start battery/lid watcher${NC}"
+        echo -e "   ${W}2)${NC} Live Status Dashboard    ${DIM}Monitor players, ping, RAM, CPU & live logs${NC}"
+        echo -e "   ${W}3)${NC} Save World Now           ${DIM}Force immediate map & player save to disk${NC}"
+        echo -e "   ${W}4)${NC} Stop Server              ${DIM}Warn players, save world, then safely quit${NC}"
+        echo -e "   ${W}5)${NC} Broadcast Message        ${DIM}Send global chat message to online players${NC}"
         echo
-        echo -e "   ${W}1)${NC} Start server"
-        echo -e "   ${W}2)${NC} Live dashboard"
-        echo -e "   ${W}3)${NC} Stop server ${DIM}(warns players, saves, then quits)${NC}"
-        echo -e "   ${W}4)${NC} Save world now"
-        echo -e "   ${W}5)${NC} Broadcast message to players"
-        echo -e "   ${W}6)${NC} Open server console ${DIM}(advanced)${NC}"
-        echo -e "   ${W}7)${NC} Install / update server"
-        echo -e "   ${W}8)${NC} Network / WAN setup"
-        echo -e "   ${W}9)${NC} Settings"
-        echo -e "  ${W}10)${NC} ${Y}Troubleshoot / reset server data${NC} ${DIM}(wipe map/save on failure)${NC}"
-        echo -e "  ${W}11)${NC} ${C}Steam Workshop Mods Manager${NC} ${DIM}(add/remove mods)${NC}"
-        echo -e "  ${W}12)${NC} ${G}World Profiles Manager${NC} ${DIM}(switch / create / clone distinct worlds)${NC}"
-        echo -e "   ${W}0)${NC} Exit ${DIM}(server keeps running in the background)${NC}"
+
+        echo -e "  ${BOLD}${G}📂 WORLD & MOD MANAGEMENT${NC}"
+        echo -e "   ${W}6)${NC} World Profiles Manager   ${DIM}Switch, create, or clone distinct worlds${NC}"
+        echo -e "   ${W}7)${NC} Steam Workshop Mods      ${DIM}Add, remove, verify & bulk import mods${NC}"
+        echo -e "   ${W}8)${NC} World & Sandbox Rules    ${DIM}Configure PvP, Sleep, Starter Kit & Shutoffs${NC}"
         echo
-        read -rp "  Choose: " a
+
+        echo -e "  ${BOLD}${Y}🛠️ SERVER & NETWORK SETUP${NC}"
+        echo -e "   ${W}9)${NC} Network & Playit.gg      ${DIM}LAN IP, Playit.gg tunnel & Firewall ports${NC}"
+        echo -e "  ${W}10)${NC} Server Settings          ${DIM}RAM limit, Steam Auth (-nosteam), Ports${NC}"
+        echo -e "  ${W}11)${NC} Troubleshoot & Logs      ${DIM}Player Login Log, Diagnostic scanner, Reset${NC}"
+        echo -e "  ${W}12)${NC} Install / Update Server  ${DIM}Download or update game files via SteamCMD${NC}"
+        echo -e "  ${W}13)${NC} Open Server Console      ${DIM}Direct interactive terminal console (advanced)${NC}"
+        echo
+        echo -e "   ${W}0)${NC} Exit Manager            ${DIM}(Server keeps running in the background)${NC}"
+        echo -e "${BOLD}${C}══════════════════════════════════════════════════════════════${NC}"
+        echo
+        read -rp "  Choose option [0-13]: " a
         case $a in
             1) start_server; pause ;;
             2) dashboard ;;
-            3) if [ -n "$(server_pid)" ] && confirm "Stop the server? The world is saved first."; then
+            3) save_world 30; pause ;;
+            4) if [ -n "$(server_pid)" ] && confirm "Stop the server? The world is saved first."; then
                    read -rp "  In-game warning countdown in seconds [${WARN_SECONDS}]: " a
                    stop_server "${a:-$WARN_SECONDS}"
                elif [ -z "$(server_pid)" ]; then warn "Server is not running."; fi
                pause ;;
-            4) save_world 30; pause ;;
             5) read -rp "  Message: " a; [ -n "$a" ] && servermsg "$a" && ok "Sent."; pause ;;
-            6) if screen_running "$SCREEN_SERVER"; then
-                   echo -e "  ${Y}Detach with Ctrl+A then D. Do NOT press Ctrl+C (it stops the server without the countdown).${NC}"
+            6) world_profiles_menu ;;
+            7) mods_menu ;;
+            8) world_settings_menu ;;
+            9) network_menu ;;
+            10) settings_menu ;;
+            11) troubleshoot_menu ;;
+            12) install_update; pause ;;
+            13) if screen_running "$SCREEN_SERVER"; then
+                   echo -e "  ${Y}Detach with Ctrl+A then D. Do NOT press Ctrl+C (it stops the server without countdown).${NC}"
                    sleep 3; screen -r "$SCREEN_SERVER"
                else warn "Server is not running."; pause; fi ;;
-            7) install_update; pause ;;
-            8) network_menu ;;
-            9) settings_menu ;;
-            10) troubleshoot_menu ;;
-            11) mods_menu ;;
-            12) world_profiles_menu ;;
             0|q|Q) clear; exit 0 ;;
         esac
     done
