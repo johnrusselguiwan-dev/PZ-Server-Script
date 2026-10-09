@@ -1682,6 +1682,8 @@ test_mods_compatibility() {
 
     ws_dir1="$SERVER_DIR/steamapps/workshop/content/380870"
     ws_dir2="$HOME/.steam/steam/steamapps/workshop/content/380870"
+    ws_dir3="$HOME/.local/share/Steam/steamapps/workshop/content/380870"
+    ws_dir4="$HOME/Zomboid/workshop/content/380870"
 
     IFS=';' read -ra m_list <<< "$cur_mods"
     IFS=';' read -ra w_list <<< "$cur_ws"
@@ -1693,7 +1695,7 @@ test_mods_compatibility() {
     echo -e "  ${BOLD}Workshop Items Status on Disk:${NC}"
     for w in "${w_list[@]}"; do
         [ -z "$w" ] && continue
-        if [ -d "$ws_dir1/$w" ] || [ -d "$ws_dir2/$w" ]; then
+        if [ -d "$ws_dir1/$w" ] || [ -d "$ws_dir2/$w" ] || [ -d "$ws_dir3/$w" ] || [ -d "$ws_dir4/$w" ]; then
             echo -e "   ${G}[✓] Workshop ID ${w}${NC} - Downloaded on disk"
             m_found=$((m_found + 1))
         else
